@@ -1,0 +1,57 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Cinema {
+  id             String              @id
+  name           String
+  location       String?
+  address         String
+  rackComponents RackComponent[]
+  lastUpdated      DateTime             
+  generator      Boolean
+}
+
+model RackComponent {
+  id        Int       @id @default(autoincrement())
+  name      String
+  status    String
+  model     String?
+  type      String
+  position  Int
+  description           String
+  batteryInstallDate           DateTime?
+  capacityVA      Int?
+  powerConsumption      Int?
+  cinemaId  String
+  cinema    Cinema    @relation(fields: [cinemaId], references: [id])
+  specs     Specs?
+}
+
+model Specs {
+  id              Int           @id @default(autoincrement())
+  ram             String?
+  storage             String?
+  cpu           String?
+  ports         Int?
+  connections    Int?
+  rackComponentId Int @unique
+  rackComponent   RackComponent @relation(fields: [rackComponentId], references: [id])
+  portDetails     PortDetails[]
+}
+
+model PortDetails {
+  id           Int    @id @default(autoincrement()) // mejor tener un ID separado
+  portNumber        Int    
+  isConnected      Boolean
+  connectedTo      String?
+  description      String?
+  specId    Int
+  spec      Specs   @relation(fields: [specId], references: [id])
+}
