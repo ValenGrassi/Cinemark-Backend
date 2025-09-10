@@ -63,90 +63,60 @@ router.patch("/cinemas/:id", async (req: Request, res: Response) => {
   }
 
   try {
-    await prisma.$transaction(async (tx) => {
-      // IDs existentes en BD
-      const existing = await tx.rackComponent.findMany({
-        where: { cinemaId: id },
+    // 1️⃣ IDs existentes en BD
+    const existing = await prisma.rackComponent.findMany({
+      where: { cinemaId: id },
+      select: { id: true },
+    });
+    const existingIds = existing.map(c => c.id);
+    const incomingIds = rackComponents.filter(c => typeof c.id === "number").map(c => c.id);
+
+    // 2️⃣ Componentes a borrar
+    const toDelete = existingIds.filter(eid => !incomingIds.includes(eid));
+    if (toDelete.length > 0) {
+      const specIds = (await prisma.specs.findMany({
+        where: { rackComponentId: { in: toDelete } },
         select: { id: true },
-      });
-      const existingIds = existing.map(c => c.id);
-      const incomingIds = rackComponents.filter(c => typeof c.id === "number").map(c => c.id);
+      })).map(s => s.id);
 
-      // Componentes a borrar
-      const toDelete = existingIds.filter(eid => !incomingIds.includes(eid));
-      if (toDelete.length > 0) {
-        // 🔹 Primero eliminar portDetails
-        await tx.portDetails.deleteMany({
-          where: { specId: { in: await tx.specs.findMany({ where: { rackComponentId: { in: toDelete } }, select: { id: true } }).then(s => s.map(x => x.id)) } }
-        });
+      await prisma.$transaction([
+        prisma.portDetails.deleteMany({ where: { specId: { in: specIds } } }),
+        prisma.specs.deleteMany({ where: { id: { in: specIds } } }),
+        prisma.rackComponent.deleteMany({ where: { id: { in: toDelete } } }),
+      ]);
+    }
 
-        // 🔹 Luego eliminar specs
-        await tx.specs.deleteMany({ where: { rackComponentId: { in: toDelete } } });
+    // 3️⃣ Crear o actualizar componentes
+    const ops = rackComponents.map(comp => {
+      const compData = {
+        name: comp.name,
+        type: comp.type,
+        status: comp.status,
+        position: comp.position ?? null,
+        model: comp.model ?? null,
+        description: comp.description ?? null,
+        powerConsumption: comp.powerConsumption ?? null,
+        capacityVA: comp.capacityVA ?? null,
+        batteryInstallDate: comp.batteryInstallDate ? new Date(comp.batteryInstallDate) : null,
+      };
 
-        // 🔹 Finalmente eliminar los rackComponents
-        await tx.rackComponent.deleteMany({ where: { id: { in: toDelete } } });
-      }
+      const specs = comp.specs ?? null;
+      const portDetails = specs?.portDetails?.map((pd: any) => ({
+        portNumber: pd.portNumber,
+        isConnected: !!pd.isConnected,
+        connectedTo: pd.connectedTo ?? null,
+        description: pd.description ?? null,
+      })) ?? [];
 
-      // Crear o actualizar componentes
-      for (const comp of rackComponents) {
-        const compData = {
-          name: comp.name,
-          type: comp.type,
-          status: comp.status,
-          position: comp.position ?? null,
-          model: comp.model ?? null,
-          description: comp.description ?? null,
-          powerConsumption: comp.powerConsumption ?? null,
-          capacityVA: comp.capacityVA ?? null,
-          batteryInstallDate: comp.batteryInstallDate ? new Date(comp.batteryInstallDate) : null,
-        };
-
-        const specs = comp.specs ?? null;
-        const portDetails = specs?.portDetails?.map((pd: any) => ({
-          portNumber: pd.portNumber,
-          isConnected: !!pd.isConnected,
-          connectedTo: pd.connectedTo ?? null,
-          description: pd.description ?? null,
-        })) ?? [];
-
-        if (existingIds.includes(comp.id)) {
-          // actualizar
-          await tx.rackComponent.update({
-            where: { id: comp.id },
-            data: {
-              ...compData,
-              specs: specs
-                ? {
-                    upsert: {
-                      create: {
-                        ram: specs.ram ?? null,
-                        storage: specs.storage ?? null,
-                        cpu: specs.cpu ?? null,
-                        ports: specs.ports ?? null,
-                        connections: specs.connections ?? null,
-                        portDetails: { create: portDetails },
-                      },
-                      update: {
-                        ram: specs.ram ?? null,
-                        storage: specs.storage ?? null,
-                        cpu: specs.cpu ?? null,
-                        ports: specs.ports ?? null,
-                        connections: specs.connections ?? null,
-                        portDetails: { deleteMany: {}, create: portDetails },
-                      },
-                    },
-                  }
-                : undefined,
-            },
-          });
-        } else {
-          // crear
-          await tx.rackComponent.create({
-            data: {
-              ...compData,
-              cinemaId: id,
-              specs: specs
-                ? {
+      if (existingIds.includes(comp.id)) {
+        // actualizar
+        return prisma.rackComponent.update({
+          where: { id: comp.id },
+          data: {
+            ...compData,
+            specs: specs
+              ? {
+                  upsert: {
                     create: {
                       ram: specs.ram ?? null,
                       storage: specs.storage ?? null,
@@ -155,17 +125,49 @@ router.patch("/cinemas/:id", async (req: Request, res: Response) => {
                       connections: specs.connections ?? null,
                       portDetails: { create: portDetails },
                     },
-                  }
-                : undefined,
-            },
-          });
-        }
+                    update: {
+                      ram: specs.ram ?? null,
+                      storage: specs.storage ?? null,
+                      cpu: specs.cpu ?? null,
+                      ports: specs.ports ?? null,
+                      connections: specs.connections ?? null,
+                      portDetails: { deleteMany: {}, create: portDetails },
+                    },
+                  },
+                }
+              : undefined,
+          },
+        });
+      } else {
+        // crear
+        return prisma.rackComponent.create({
+          data: {
+            ...compData,
+            cinemaId: id,
+            specs: specs
+              ? {
+                  create: {
+                    ram: specs.ram ?? null,
+                    storage: specs.storage ?? null,
+                    cpu: specs.cpu ?? null,
+                    ports: specs.ports ?? null,
+                    connections: specs.connections ?? null,
+                    portDetails: { create: portDetails },
+                  },
+                }
+              : undefined,
+          },
+        });
       }
+    });
 
-      await tx.cinema.update({
-        where: { id },
-        data: { lastUpdated: new Date() },
-      });
+    // Ejecutar todas las operaciones en paralelo en una sola transacción
+    await prisma.$transaction(ops);
+
+    // Actualizar fecha del cine
+    await prisma.cinema.update({
+      where: { id },
+      data: { lastUpdated: new Date() },
     });
 
     const updated = await prisma.cinema.findUnique({
@@ -181,5 +183,4 @@ router.patch("/cinemas/:id", async (req: Request, res: Response) => {
     res.status(500).json({ error: "Error interno al actualizar rackComponents" });
   }
 });
-
 export default router;
