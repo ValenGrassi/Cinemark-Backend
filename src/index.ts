@@ -10,7 +10,7 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(cors({
-  origin: "http://localhost:3000",  // tu frontend
+  origin: ["http://localhost:3000", "https://cinemark-it.netlify.app"],  // tu frontend
   methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type"],
 }));
